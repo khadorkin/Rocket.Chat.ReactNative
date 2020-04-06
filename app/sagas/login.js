@@ -73,13 +73,15 @@ const registerPushToken = function* registerPushToken() {
 
 const fetchUsersPresence = function* fetchUserPresence() {
 	yield RocketChat.getUsersPresence();
-	yield RocketChat.subscribeUsersPresence();
+	RocketChat.subscribeUsersPresence();
 };
 
 const handleLoginSuccess = function* handleLoginSuccess({ user }) {
 	try {
 		const adding = yield select(state => state.server.adding);
 		yield RNUserDefaults.set(RocketChat.TOKEN_KEY, user.token);
+
+		RocketChat.getUserPresence(user.id);
 
 		const server = yield select(getServer);
 		yield put(roomsRequest());
@@ -101,6 +103,7 @@ const handleLoginSuccess = function* handleLoginSuccess({ user }) {
 			name: user.name,
 			language: user.language,
 			status: user.status,
+			statusText: user.statusText,
 			roles: user.roles
 		};
 		yield serversDB.action(async() => {
