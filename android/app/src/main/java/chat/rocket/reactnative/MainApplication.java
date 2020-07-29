@@ -9,9 +9,11 @@ import com.facebook.react.PackageList;
 import com.facebook.hermes.reactexecutor.HermesExecutorFactory;
 import com.facebook.react.bridge.JavaScriptExecutorFactory;
 import com.facebook.react.ReactApplication;
+import com.facebook.react.ReactInstanceManager;
 import com.facebook.react.ReactNativeHost;
 import com.facebook.react.ReactPackage;
 import com.facebook.soloader.SoLoader;
+import java.lang.reflect.InvocationTargetException;
 
 import chat.rocket.reactnative.generated.BasePackageList;
 
@@ -27,10 +29,6 @@ import com.wix.reactnativenotifications.core.notification.INotificationsApplicat
 import com.wix.reactnativenotifications.core.notification.IPushNotification;
 import com.wix.reactnativekeyboardinput.KeyboardInputPackage;
 
-import io.invertase.firebase.fabric.crashlytics.RNFirebaseCrashlyticsPackage;
-import io.invertase.firebase.analytics.RNFirebaseAnalyticsPackage;
-import io.invertase.firebase.perf.RNFirebasePerformancePackage;
-
 import com.nozbe.watermelondb.WatermelonDBPackage;
 import com.reactnativecommunity.viewpager.RNCViewPagerPackage;
 
@@ -39,7 +37,7 @@ import java.util.List;
 
 public class MainApplication extends Application implements ReactApplication, INotificationsApplication {
 
-  private final ReactModuleRegistryProvider mModuleRegistryProvider = new ReactModuleRegistryProvider(new BasePackageList().getPackageList(), Arrays.<SingletonModule>asList());
+  private final ReactModuleRegistryProvider mModuleRegistryProvider = new ReactModuleRegistryProvider(new BasePackageList().getPackageList(), null);
 
   private final ReactNativeHost mReactNativeHost = new ReactNativeHost(this) {
     @Override
@@ -51,14 +49,15 @@ public class MainApplication extends Application implements ReactApplication, IN
     protected List<ReactPackage> getPackages() {
       @SuppressWarnings("UnnecessaryLocalVariable")
       List<ReactPackage> packages = new PackageList(this).getPackages();
-      packages.add(new RNFirebaseCrashlyticsPackage());
-      packages.add(new RNFirebaseAnalyticsPackage());
-      packages.add(new RNFirebasePerformancePackage());
       packages.add(new KeyboardInputPackage(MainApplication.this));
       packages.add(new RNNotificationsPackage(MainApplication.this));
       packages.add(new WatermelonDBPackage());
       packages.add(new RNCViewPagerPackage());
-      packages.add(new ModuleRegistryAdapter(mModuleRegistryProvider));
+      // packages.add(new ModuleRegistryAdapter(mModuleRegistryProvider));
+      List<ReactPackage> unimodules = Arrays.<ReactPackage>asList(
+        new ModuleRegistryAdapter(mModuleRegistryProvider)
+      );
+      packages.addAll(unimodules);
       return packages;
     }
 
@@ -82,6 +81,38 @@ public class MainApplication extends Application implements ReactApplication, IN
   public void onCreate() {
     super.onCreate();
     SoLoader.init(this, /* native exopackage */ false);
+    initializeFlipper(this, getReactNativeHost().getReactInstanceManager());
+  }
+
+  /**
+   * Loads Flipper in React Native templates. Call this in the onCreate method with something like
+   * initializeFlipper(this, getReactNativeHost().getReactInstanceManager());
+   *
+   * @param context
+   * @param reactInstanceManager
+   */
+  private static void initializeFlipper(
+      Context context, ReactInstanceManager reactInstanceManager) {
+    if (BuildConfig.DEBUG) {
+      try {
+        /*
+         We use reflection here to pick up the class that initializes Flipper,
+        since Flipper library is not available in release mode
+        */
+        Class<?> aClass = Class.forName("chat.rocket.reactnative");
+        aClass
+            .getMethod("initializeFlipper", Context.class, ReactInstanceManager.class)
+            .invoke(null, context, reactInstanceManager);
+      } catch (ClassNotFoundException e) {
+        e.printStackTrace();
+      } catch (NoSuchMethodException e) {
+        e.printStackTrace();
+      } catch (IllegalAccessException e) {
+        e.printStackTrace();
+      } catch (InvocationTargetException e) {
+        e.printStackTrace();
+      }
+    }
   }
 
   @Override

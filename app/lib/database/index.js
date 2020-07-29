@@ -33,6 +33,36 @@ if (__DEV__ && isIOS) {
 	console.log(appGroupPath);
 }
 
+export const getDatabase = (database = '') => {
+	const path = database.replace(/(^\w+:|^)\/\//, '').replace(/\//g, '.');
+	const dbName = `${ appGroupPath }${ path }.db`;
+
+	const adapter = new SQLiteAdapter({
+		dbName,
+		schema: appSchema,
+		migrations
+	});
+
+	return new Database({
+		adapter,
+		modelClasses: [
+			Subscription,
+			Room,
+			Message,
+			Thread,
+			ThreadMessage,
+			CustomEmoji,
+			FrequentlyUsedEmoji,
+			Upload,
+			Setting,
+			Role,
+			Permission,
+			SlashCommand
+		],
+		actionsEnabled: true
+	});
+};
+
 class DB {
 	databases = {
 		serversDB: new Database({
@@ -80,40 +110,16 @@ class DB {
 				Thread,
 				ThreadMessage,
 				Upload,
-				Permission
+				Permission,
+				CustomEmoji,
+				FrequentlyUsedEmoji
 			],
 			actionsEnabled: true
 		});
 	}
 
-	setActiveDB(database = '') {
-		const path = database.replace(/(^\w+:|^)\/\//, '').replace(/\//g, '.');
-		const dbName = `${ appGroupPath }${ path }.db`;
-
-		const adapter = new SQLiteAdapter({
-			dbName,
-			schema: appSchema,
-			migrations
-		});
-
-		this.databases.activeDB = new Database({
-			adapter,
-			modelClasses: [
-				Subscription,
-				Room,
-				Message,
-				Thread,
-				ThreadMessage,
-				CustomEmoji,
-				FrequentlyUsedEmoji,
-				Upload,
-				Setting,
-				Role,
-				Permission,
-				SlashCommand
-			],
-			actionsEnabled: true
-		});
+	setActiveDB(database) {
+		this.databases.activeDB = getDatabase(database);
 	}
 }
 

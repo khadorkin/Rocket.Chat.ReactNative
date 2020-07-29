@@ -4,12 +4,11 @@ import {
 	View, SectionList, Text, Alert, Share
 } from 'react-native';
 import { connect } from 'react-redux';
-import { SafeAreaView } from 'react-navigation';
 import _ from 'lodash';
 
 import Touch from '../../utils/touch';
 import { setLoading as setLoadingAction } from '../../actions/selectedUsers';
-import { leaveRoom as leaveRoomAction } from '../../actions/room';
+import { leaveRoom as leaveRoomAction, closeRoom as closeRoomAction } from '../../actions/room';
 import styles from './styles';
 import sharedStyles from '../Styles';
 import Avatar from '../../containers/Avatar';
@@ -24,19 +23,19 @@ import DisclosureIndicator from '../../containers/DisclosureIndicator';
 import StatusBar from '../../containers/StatusBar';
 import { themes } from '../../constants/colors';
 import { withTheme } from '../../theme';
-import { themedHeader } from '../../utils/navigation';
 import { CloseModalButton } from '../../containers/HeaderButton';
 import { getUserSelector } from '../../selectors/login';
 import Markdown from '../../containers/markdown';
+import { showConfirmationAlert, showErrorAlert } from '../../utils/info';
+import SafeAreaView from '../../containers/SafeAreaView';
 
 class RoomActionsView extends React.Component {
-	static navigationOptions = ({ navigation, screenProps }) => {
+	static navigationOptions = ({ navigation, isMasterDetail }) => {
 		const options = {
-			...themedHeader(screenProps.theme),
 			title: I18n.t('Actions')
 		};
-		if (screenProps.split) {
-			options.headerLeft = <CloseModalButton navigation={navigation} testID='room-actions-view-close' />;
+		if (isMasterDetail) {
+			options.headerLeft = () => <CloseModalButton navigation={navigation} testID='room-actions-view-close' />;
 		}
 		return options;
 	}
@@ -44,6 +43,7 @@ class RoomActionsView extends React.Component {
 	static propTypes = {
 		baseUrl: PropTypes.string,
 		navigation: PropTypes.object,
+		route: PropTypes.object,
 		user: PropTypes.shape({
 			id: PropTypes.string,
 			token: PropTypes.string
@@ -51,16 +51,17 @@ class RoomActionsView extends React.Component {
 		leaveRoom: PropTypes.func,
 		jitsiEnabled: PropTypes.bool,
 		setLoadingInvite: PropTypes.func,
+		closeRoom: PropTypes.func,
 		theme: PropTypes.string
 	}
 
 	constructor(props) {
 		super(props);
 		this.mounted = false;
-		const room = props.navigation.getParam('room');
-		const member = props.navigation.getParam('member');
-		this.rid = props.navigation.getParam('rid');
-		this.t = props.navigation.getParam('t');
+		const room = props.route.params?.room;
+		const member = props.route.params?.member;
+		this.rid = props.route.params?.rid;
+		this.t = props.route.params?.t;
 		this.state = {
 			room: room || { rid: this.rid, t: this.t },
 			membersCount: 0,
@@ -69,7 +70,9 @@ class RoomActionsView extends React.Component {
 			canViewMembers: false,
 			canAutoTranslate: false,
 			canAddUser: false,
-			canInviteUser: false
+			canInviteUser: false,
+			canForwardGuest: false,
+			canReturnQueue: false
 		};
 		if (room && room.observe && room.rid) {
 			this.roomObservable = room.observe();
@@ -87,35 +90,43 @@ class RoomActionsView extends React.Component {
 	async componentDidMount() {
 		this.mounted = true;
 		const { room, member } = this.state;
-		if (!room.id) {
-			try {
-				const result = await RocketChat.getChannelInfo(room.rid);
-				if (result.success) {
-					this.setState({ room: { ...result.channel, rid: result.channel._id } });
+		if (room.rid) {
+			if (!room.id) {
+				try {
+					const result = await RocketChat.getChannelInfo(room.rid);
+					if (result.success) {
+						this.setState({ room: { ...result.channel, rid: result.channel._id } });
+					}
+				} catch (e) {
+					log(e);
 				}
-			} catch (e) {
-				log(e);
+			}
+
+			if (room && room.t !== 'd' && this.canViewMembers()) {
+				try {
+					const counters = await RocketChat.getRoomCounters(room.rid, room.t);
+					if (counters.success) {
+						this.setState({ membersCount: counters.members, joined: counters.joined });
+					}
+				} catch (e) {
+					log(e);
+				}
+			} else if (room.t === 'd' && _.isEmpty(member)) {
+				this.updateRoomMember();
+			}
+
+			const canAutoTranslate = await RocketChat.canAutoTranslate();
+			this.setState({ canAutoTranslate });
+
+			this.canAddUser();
+			this.canInviteUser();
+
+			// livechat permissions
+			if (room.t === 'l') {
+				this.canForwardGuest();
+				this.canReturnQueue();
 			}
 		}
-
-		if (room && room.t !== 'd' && this.canViewMembers()) {
-			try {
-				const counters = await RocketChat.getRoomCounters(room.rid, room.t);
-				if (counters.success) {
-					this.setState({ membersCount: counters.members, joined: counters.joined });
-				}
-			} catch (e) {
-				log(e);
-			}
-		} else if (room.t === 'd' && _.isEmpty(member)) {
-			this.updateRoomMember();
-		}
-
-		const canAutoTranslate = await RocketChat.canAutoTranslate();
-		this.setState({ canAutoTranslate });
-
-		this.canAddUser();
-		this.canInviteUser();
 	}
 
 	componentWillUnmount() {
@@ -184,9 +195,32 @@ class RoomActionsView extends React.Component {
 		return result;
 	}
 
+	canForwardGuest = async() => {
+		const { room } = this.state;
+		const { rid } = room;
+		let result = true;
+
+		const transferLivechatGuest = 'transfer-livechat-guest';
+		const permissions = await RocketChat.hasPermission([transferLivechatGuest], rid);
+		if (!permissions[transferLivechatGuest]) {
+			result = false;
+		}
+
+		this.setState({ canForwardGuest: result });
+	}
+
+	canReturnQueue = async() => {
+		try {
+			const { returnQueue } = await RocketChat.getRoutingConfig();
+			this.setState({ canReturnQueue: returnQueue });
+		} catch {
+			// do nothing
+		}
+	}
+
 	get sections() {
 		const {
-			room, member, membersCount, canViewMembers, canAddUser, canInviteUser, joined, canAutoTranslate
+			room, member, membersCount, canViewMembers, canAddUser, canInviteUser, joined, canAutoTranslate, canForwardGuest, canReturnQueue
 		} = this.state;
 		const { jitsiEnabled } = this.props;
 		const {
@@ -195,7 +229,7 @@ class RoomActionsView extends React.Component {
 		const isGroupChat = RocketChat.isGroupChat(room);
 
 		const notificationsAction = {
-			icon: 'bell',
+			icon: 'notification',
 			name: I18n.t('Notifications'),
 			route: 'NotificationPrefView',
 			params: { rid, room },
@@ -204,13 +238,13 @@ class RoomActionsView extends React.Component {
 
 		const jitsiActions = jitsiEnabled ? [
 			{
-				icon: 'livechat',
+				icon: 'phone',
 				name: I18n.t('Voice_call'),
 				event: () => RocketChat.callJitsi(rid, true),
 				testID: 'room-actions-voice'
 			},
 			{
-				icon: 'video',
+				icon: 'camera', // TODO: change me
 				name: I18n.t('Video_call'),
 				event: () => RocketChat.callJitsi(rid),
 				testID: 'room-actions-video'
@@ -236,14 +270,14 @@ class RoomActionsView extends React.Component {
 		}, {
 			data: [
 				{
-					icon: 'file-generic',
+					icon: 'attach',
 					name: I18n.t('Files'),
 					route: 'MessagesView',
 					params: { rid, t, name: 'Files' },
 					testID: 'room-actions-files'
 				},
 				{
-					icon: 'at',
+					icon: 'mention',
 					name: I18n.t('Mentions'),
 					route: 'MessagesView',
 					params: { rid, t, name: 'Mentions' },
@@ -257,7 +291,7 @@ class RoomActionsView extends React.Component {
 					testID: 'room-actions-starred'
 				},
 				{
-					icon: 'magnifier',
+					icon: 'search',
 					name: I18n.t('Search'),
 					route: 'SearchMessagesView',
 					params: { rid },
@@ -331,7 +365,7 @@ class RoomActionsView extends React.Component {
 
 			if (canAddUser) {
 				actions.push({
-					icon: 'plus',
+					icon: 'add',
 					name: I18n.t('Add_users'),
 					route: 'SelectedUsersView',
 					params: {
@@ -344,7 +378,7 @@ class RoomActionsView extends React.Component {
 			}
 			if (canInviteUser) {
 				actions.push({
-					icon: 'user-plus',
+					icon: 'user-add',
 					name: I18n.t('Invite_users'),
 					route: 'InviteUsersView',
 					params: {
@@ -360,7 +394,7 @@ class RoomActionsView extends React.Component {
 				sections.push({
 					data: [
 						{
-							icon: 'sign-out',
+							icon: 'logout',
 							name: I18n.t('Leave_channel'),
 							type: 'danger',
 							event: this.leaveChannel,
@@ -371,7 +405,42 @@ class RoomActionsView extends React.Component {
 				});
 			}
 		} else if (t === 'l') {
-			sections[2].data = [notificationsAction];
+			sections[2].data = [];
+
+			sections[2].data.push({
+				icon: 'close',
+				name: I18n.t('Close'),
+				event: this.closeLivechat
+			});
+
+			if (canForwardGuest) {
+				sections[2].data.push({
+					icon: 'user-forward',
+					name: I18n.t('Forward'),
+					route: 'ForwardLivechatView',
+					params: { rid }
+				});
+			}
+
+			if (canReturnQueue) {
+				sections[2].data.push({
+					icon: 'undo',
+					name: I18n.t('Return'),
+					event: this.returnLivechat
+				});
+			}
+
+			sections[2].data.push({
+				icon: 'history',
+				name: I18n.t('Navigation_history'),
+				route: 'VisitorNavigationView',
+				params: { rid }
+			});
+
+			sections.push({
+				data: [notificationsAction],
+				renderItem: this.renderItem
+			});
 		}
 
 		return sections;
@@ -380,6 +449,28 @@ class RoomActionsView extends React.Component {
 	renderSeparator = () => {
 		const { theme } = this.props;
 		return <View style={[styles.separator, { backgroundColor: themes[theme].separatorColor }]} />;
+	}
+
+	closeLivechat = () => {
+		const { room: { rid } } = this.state;
+		const { closeRoom } = this.props;
+
+		closeRoom(rid);
+	}
+
+	returnLivechat = () => {
+		const { room: { rid } } = this.state;
+		showConfirmationAlert({
+			message: I18n.t('Would_you_like_to_return_the_inquiry'),
+			callToAction: I18n.t('Yes'),
+			onPress: async() => {
+				try {
+					await RocketChat.returnLivechat(rid);
+				} catch (e) {
+					showErrorAlert(e.reason, I18n.t('Oops'));
+				}
+			}
+		});
 	}
 
 	updateRoomMember = async() => {
@@ -442,7 +533,7 @@ class RoomActionsView extends React.Component {
 
 		Alert.alert(
 			I18n.t('Are_you_sure_question_mark'),
-			I18n.t('Are_you_sure_you_want_to_leave_the_room', { room: room.t === 'd' ? room.fname : room.name }),
+			I18n.t('Are_you_sure_you_want_to_leave_the_room', { room: RocketChat.getRoomTitle(room) }),
 			[
 				{
 					text: I18n.t('Cancel'),
@@ -478,13 +569,13 @@ class RoomActionsView extends React.Component {
 					>
 						{t === 'd' && member._id ? <Status style={sharedStyles.status} id={member._id} /> : null }
 					</Avatar>
-					<View style={styles.roomTitleContainer}>
+					<View style={[styles.roomTitleContainer, item.disabled && styles.roomTitlePadding]}>
 						{room.t === 'd'
 							? <Text style={[styles.roomTitle, { color: themes[theme].titleText }]} numberOfLines={1}>{room.fname}</Text>
 							: (
 								<View style={styles.roomTitleRow}>
-									<RoomTypeIcon type={room.prid ? 'discussion' : room.t} theme={theme} />
-									<Text style={[styles.roomTitle, { color: themes[theme].titleText }]} numberOfLines={1}>{room.prid ? room.fname : room.name}</Text>
+									<RoomTypeIcon type={room.prid ? 'discussion' : room.t} status={room.visitor?.status} theme={theme} />
+									<Text style={[styles.roomTitle, { color: themes[theme].titleText }]} numberOfLines={1}>{RocketChat.getRoomTitle(room)}</Text>
 								</View>
 							)
 						}
@@ -495,7 +586,7 @@ class RoomActionsView extends React.Component {
 							numberOfLines={1}
 							theme={theme}
 						/>
-						{room.t === 'd' && <Markdown msg={member.statusText} style={[styles.roomDescription, { color: themes[theme].auxiliaryText }]} preview theme={theme} />}
+						{room.t === 'd' && <Markdown msg={member.statusText} style={[styles.roomDescription, { color: themes[theme].auxiliaryText }]} preview theme={theme} numberOfLines={1} />}
 					</View>
 					{!item.disabled && <DisclosureIndicator theme={theme} />}
 				</>
@@ -555,7 +646,7 @@ class RoomActionsView extends React.Component {
 	render() {
 		const { theme } = this.props;
 		return (
-			<SafeAreaView style={styles.container} testID='room-actions-view' forceInset={{ vertical: 'never' }}>
+			<SafeAreaView testID='room-actions-view' theme={theme}>
 				<StatusBar theme={theme} />
 				<SectionList
 					contentContainerStyle={[styles.contentContainer, { backgroundColor: themes[theme].auxiliaryBackground }]}
@@ -581,6 +672,7 @@ const mapStateToProps = state => ({
 
 const mapDispatchToProps = dispatch => ({
 	leaveRoom: (rid, t) => dispatch(leaveRoomAction(rid, t)),
+	closeRoom: rid => dispatch(closeRoomAction(rid)),
 	setLoadingInvite: loading => dispatch(setLoadingAction(loading))
 });
 
